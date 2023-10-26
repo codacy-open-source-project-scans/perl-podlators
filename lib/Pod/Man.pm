@@ -51,9 +51,7 @@ BEGIN { *ASCII = \&Pod::Simple::ASCII }
 # Formatting instructions for various types of blocks.  cleanup makes hyphens
 # hard, adds spaces between consecutive underscores, and escapes backslashes.
 # convert translates characters into escapes.  guesswork means to apply the
-# transformations done by the guesswork sub (if enabled).  literal says to
-# protect literal quotes from being turned into UTF-8 quotes.  By default, all
-# transformations are on except literal, but some elements override.
+# transformations done by the guesswork sub (if enabled).
 #
 # DEFAULT specifies the default settings.  All other elements should list only
 # those settings that they are overriding.  Data indicates =for roff blocks,
@@ -62,11 +60,11 @@ BEGIN { *ASCII = \&Pod::Simple::ASCII }
 # Formatting inherits negatively, in the sense that if the parent has turned
 # off guesswork, all child elements should leave it off.
 my %FORMATTING = (
-    DEFAULT  => { cleanup => 1, convert => 1, guesswork => 1, literal => 0 },
-    Data     => { cleanup => 0, convert => 0, guesswork => 0, literal => 0 },
-    Verbatim => {                             guesswork => 0, literal => 1 },
-    C        => {                             guesswork => 0, literal => 1 },
-    X        => { cleanup => 0,               guesswork => 0               },
+    DEFAULT  => { cleanup => 1, convert => 1, guesswork => 1 },
+    Data     => { cleanup => 0, convert => 0, guesswork => 0 },
+    Verbatim => {                             guesswork => 0 },
+    C        => {                             guesswork => 0 },
+    X        => { cleanup => 0,               guesswork => 0 },
 );
 
 # Try to map an encoding as understood by Perl Encode to an encoding
@@ -470,7 +468,6 @@ sub format_text {
     my $guesswork = $$options{guesswork} && !$$self{IN_NAME};
     my $cleanup = $$options{cleanup};
     my $convert = $$options{convert};
-    my $literal = $$options{literal};
 
     # Cleanup just tidies up a few things, telling *roff that the hyphens are
     # hard, putting a bit of space between consecutive underscores, escaping
@@ -501,10 +498,8 @@ sub format_text {
 
     # Ensure that *roff doesn't convert literal quotes to UTF-8 single quotes,
     # but don't mess up accent escapes.
-    if ($literal) {
-        $text =~ s/(?<!\\\*)\'/\\*\(Aq/g;
-        $text =~ s/(?<!\\\*)\`/\\\`/g;
-    }
+    $text =~ s/(?<!\\\*)\'/\\*\(Aq/g;
+    $text =~ s/(?<!\\\*)\`/\\\`/g;
 
     # If guesswork is is viable for this block, do that.
     if ($guesswork) {
@@ -577,26 +572,6 @@ sub quote_literal {
 sub guesswork {
     my $self = shift;
     local $_ = shift;
-
-    # By the time we reach this point, all hyphens will be escaped by adding a
-    # backslash.  We want to undo that escaping if they're part of regular
-    # words and there's only a single dash, since that's a real hyphen that
-    # *roff gets to consider a possible break point.  Make sure that a dash
-    # after the first character of a word stays non-breaking, however.
-    #
-    # Note that this is not user-controllable; we pretty much have to do this
-    # transformation or *roff will mangle the output in unacceptable ways.
-    s{
-        ( (?:\G|^|\s|$NBSP) [\(\"]* [a-zA-Z] ) ( \\- )?
-        ( (?: [a-zA-Z\']+ \\-)+ )
-        ( [a-zA-Z\']+ ) (?= [\)\".?!,;:]* (?:\s|$NBSP|\Z|\\\ ) )
-        \b
-    } {
-        my ($prefix, $hyphen, $main, $suffix) = ($1, $2, $3, $4);
-        $hyphen ||= '';
-        $main =~ s/\\-/-/g;
-        $prefix . $hyphen . $main . $suffix;
-    }egx;
 
     # Embolden functions in the form func(), including functions that are in
     # all capitals, but don't embolden if there's anything inside the parens.
@@ -804,7 +779,9 @@ sub outindex {
     }
     if ($section) {
         $index =~ s/\\-/-/g;
-        $index =~ s/\\(?:s-?\d|.\(..|.)//g;
+        $index =~ s/\\\`/\`/g;
+        $index =~ s/\\[*]\(Aq/\'/g;
+        $index =~ s/\\(?:.\(..|.)//g;
         push @output, [ $section, $index ];
     }
 
@@ -1302,10 +1279,17 @@ sub cmd_x {
     return '';
 }
 
-# Links reduce to the text that we're given, wrapped in angle brackets if it's
-# a URL, followed by the URL.  We take an option to suppress the URL if anchor
-# text is given.  We need to format the "to" value of the link before
-# comparing it to the text since we may escape hyphens.
+# Pod::Man requires some special handling of links, so cannot treat it simply
+# as a formatting directive all the time.
+#
+# For URL links, we want to show the URL itself in angle brackets, even
+# (optionally) if there is anchor text.  We need to format the "to" value of
+# the link before comparing it to the text since we may escape hyphens.
+#
+# For man page links, we want to ensure that the entire man page reference is
+# formatted like one, even if we normally wouldn't detect it as such.  This
+# means we can't use the formatting that Pod::Simple does for us, and instead
+# need to do all of the formatting ourselves.
 sub cmd_l {
     my ($self, $attrs, $text) = @_;
     if ($$attrs{type} eq 'url') {
@@ -1320,6 +1304,34 @@ sub cmd_l {
             return $text;
         } else {
             return "$text <$$attrs{to}>";
+        }
+    } elsif ($$attrs{type} eq 'man') {
+        if (not $$attrs{'content-implicit'}) {
+            return $text;
+        }
+        my $tag = $$self{PENDING}[-1];
+        my $to = $$attrs{to};
+        my $section = $$attrs{section};
+        if ($section) {
+            $section = $self->format_text ($$tag[1], qq{"$section"});
+        }
+
+        # If the man reference cannot be parsed, just fall back on whatever
+        # Pod::Simple wants to do.
+        my ($page, $mansection) = $to =~ m{ \A (.*) \( ([^\)]+) \) \z }xms;
+        if (!defined($page) || !defined($mansection)) {
+            return $text;
+        }
+
+        # Otherwise, do proper formatting, copying the normal output style of
+        # Pod::Simple.
+        $page = $self->format_text ($$tag[1], $page);
+        $mansection = $self->format_text ($$tag[1], $mansection);
+        $to = '\f(BS' . $page . '\f(BE\|' . "($mansection)";
+        if (defined($section)) {
+            return "$section in $to";
+        } else {
+            return $to;
         }
     } else {
         return $text;
@@ -2304,6 +2316,14 @@ attempts to add subtle formatting corrections in the output that would only be
 visible when typeset with B<troff>, which had previously been a significant
 source of bugs.
 
+Pod::Man 6.00 and later unconditionally convert C<-> to the C<\-> *roff
+escape, representing an ASCII hyphen-minus.  Earlier versions attempted to use
+heuristics to decide when a given C<-> character should translate to a
+hyphen-minus or a true hyphen, but these heuristics were buggy and fragile.
+6.00 and later also unconditionally convert C<`> and C<'> to ASCII grave
+accent and apostrophe marks instead of the default *roff behavior of
+interpreting them as paired quotes.
+
 =head1 BUGS
 
 There are numerous bugs and language-specific assumptions in the nroff
@@ -2347,11 +2367,34 @@ ends in a period or similar sentence-ending paragraph.  Otherwise, B<nroff>
 will add a two spaces after that sentence when reflowing, and your output
 document will have inconsistent spacing.
 
-=head2 Hyphens
+=head2 Hyphens and quotes
 
-The handling of hyphens versus dashes is somewhat fragile, and one may get a
-the wrong one under some circumstances.  This will normally only matter for
-line breaking and possibly for troff output.
+The *roff language distinguishes between two types of hyphens: C<->, which is
+a true typesetting hyphen (roughly equivalent to the Unicode U+2010 code
+point), and C<\->, which is the ASCII hyphen-minus (U+002D) that is used for
+UNIX command options and most filenames.  Hyphens, where appropriate, produce
+better typesetting, but incorrectly using them for command names and options
+can cause problems with searching and cut-and-paste.
+
+POD does not draw this distinction.  Before podlators 6.00, Pod::Man attempted
+to translate C<-> in the input into either a hyphen or a hyphen-minus,
+depending on context.  However, this distinction proved impossible to do
+correctly with heuristics.  Pod::Man therefore translates all C<-> characters
+in the input to C<\-> in the output, ensuring that command names and options
+are correct at the cost of somewhat inferior typesetting and line breaking
+issues with long hyphenated phrases.
+
+To use true hyphens in the Pod::Man output, declare an input character set of
+UTF-8 (or some other Unicode encoding) and use Unicode hyphens.  Pod::Man and
+*roff should handle those correctly with the default output format and most
+modern *roff implementations.
+
+Similarly, Pod::Man disables the default *roff behavior of turning C<`> and
+C<'> characters into matched quotes, and pairs of those characters into
+matched double quotes, because there is no good way to tell from the POD input
+whether this interpretation is desired or whether the intent is to use a
+literal grave accent or neutral apostrophe.  If you want paired quotes in the
+output, use Unicode and its paired quote characters.
 
 =head1 AUTHOR
 
@@ -2364,7 +2407,7 @@ recognition and all bugs are mine.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 1999-2010, 2012-2020, 2022 Russ Allbery <rra@cpan.org>
+Copyright 1999-2010, 2012-2020, 2022-2023 Russ Allbery <rra@cpan.org>
 
 Substantial contributions by Sean Burke <sburke@cpan.org>.
 
