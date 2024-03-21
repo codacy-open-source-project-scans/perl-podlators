@@ -12,35 +12,32 @@
 # Modules and declarations
 ##############################################################################
 
-package Pod::Man;
+package Pod::Man v6.0.0;
 
-use 5.010;
-use strict;
+use 5.012;
+use parent qw(Pod::Simple);
 use warnings;
 
 use Carp qw(carp croak);
-use Pod::Simple ();
 
 # Conditionally import Encode and set $HAS_ENCODE if it is available.  This is
 # required to support building as part of Perl core, since podlators is built
 # before Encode is.
 my $HAS_ENCODE;
+
 BEGIN {
     $HAS_ENCODE = eval { require Encode };
 }
-
-our @ISA = qw(Pod::Simple);
-our $VERSION = '5.01';
 
 # Ensure that $Pod::Simple::nbsp and $Pod::Simple::shy are available.  Code
 # taken from Pod::Simple 3.32, but was only added in 3.30.
 my ($NBSP, $SHY);
 if ($Pod::Simple::VERSION ge 3.30) {
     $NBSP = $Pod::Simple::nbsp;
-    $SHY  = $Pod::Simple::shy;
+    $SHY = $Pod::Simple::shy;
 } else {
-    $NBSP = chr utf8::unicode_to_native(0xA0);
-    $SHY  = chr utf8::unicode_to_native(0xAD);
+    $NBSP = chr(utf8::unicode_to_native(0xA0));
+    $SHY = chr(utf8::unicode_to_native(0xAD));
 }
 
 # Import the ASCII constant from Pod::Simple.  This is true iff we're in an
@@ -59,6 +56,7 @@ BEGIN { *ASCII = \&Pod::Simple::ASCII }
 #
 # Formatting inherits negatively, in the sense that if the parent has turned
 # off guesswork, all child elements should leave it off.
+#<<<
 my %FORMATTING = (
     DEFAULT  => { cleanup => 1, convert => 1, guesswork => 1 },
     Data     => { cleanup => 0, convert => 0, guesswork => 0 },
@@ -66,6 +64,7 @@ my %FORMATTING = (
     C        => {                             guesswork => 0 },
     X        => { cleanup => 0,               guesswork => 0 },
 );
+#>>>
 
 # Try to map an encoding as understood by Perl Encode to an encoding
 # understood by groff's preconv.  Encode doesn't care about hyphens or
@@ -115,6 +114,7 @@ my %ENCODINGS = (
 # This only works in an ASCII world.  What to do in a non-ASCII world is very
 # unclear, so we just output what we get and hope for the best.
 my %ESCAPES;
+#<<<
 @ESCAPES{0xA0 .. 0xFF} = (
     $NBSP, undef, undef, undef,            undef, undef, undef, undef,
     undef, undef, undef, undef,            undef, $SHY,  undef, undef,
@@ -134,6 +134,7 @@ my %ESCAPES;
     "\\*(d-", "n\\*~", "o\\*`", "o\\*'",   "o\\*^", "o\\*~", "o\\*:",  undef,
     "o\\*/" , "u\\*`", "u\\*'", "u\\*^",   "u\\*:", "y\\*'", "\\*(th", "y\\*:",
 ) if ASCII;
+#>>>
 
 ##############################################################################
 # Utility functions
@@ -255,14 +256,12 @@ sub new {
     my $guesswork = $self->{opt_guesswork} || q{};
     my %guesswork = map { $_ => 1 } split(m{,}xms, $guesswork);
     if (!%guesswork || $guesswork{all}) {
-        #<<<
         $$self{GUESSWORK} = {
             functions => 1,
             manref    => 1,
             quoting   => 1,
             variables => 1,
         };
-        #>>>
     } elsif ($guesswork{none}) {
         $$self{GUESSWORK} = {};
     } else {
@@ -799,8 +798,8 @@ sub outindex {
 sub output {
     my ($self, @text) = @_;
     my $text = join('', @text);
-    $text =~ s{$NBSP}{\\ }g;
-    $text =~ s{$SHY}{\\%}g;
+    $text =~ s{$NBSP}{\\ }xmsg;
+    $text =~ s{$SHY}{\\%}xmsg;
 
     if ($$self{ENCODE} && _needs_encode($$self{ENCODING})) {
         my $check = sub {
@@ -842,6 +841,7 @@ sub start_document {
     if ($$self{ENCODING}) {
         $$self{ENCODE} = 1;
         eval {
+            require PerlIO;
             my @options = (output => 1, details => 1);
             my @layers = PerlIO::get_layers (*{$$self{output_fh}}, @options);
             if ($layers[-1] && ($layers[-1] & PerlIO::F_UTF8 ())) {
@@ -1121,11 +1121,11 @@ sub cmd_para {
     }
 
     # Force exactly one newline at the end and strip unwanted trailing
-    # whitespace at the end, but leave "\ " backslashed space from an S< > at
-    # the end of a line.  Reverse the text first, to avoid having to scan the
-    # entire paragraph.
+    # whitespace at the end, but leave Unicode whitespace (which includes the
+    # nonbreaking spaces from S<>).  Reverse the text first, to avoid having
+    # to scan the entire paragraph.
     $text = reverse $text;
-    $text =~ s/\A\s*?(?= \\|\S|\z)/\n/;
+    $text =~ s{ \A [ \t\n]* }{\n}xms;
     $text = reverse $text;
 
     # Output the paragraph.
@@ -1384,6 +1384,14 @@ sub over_common_end {
     $$self{INDENT} = pop @{ $$self{INDENTS} };
     pop @{ $$self{ITEMTYPES} };
 
+    # If there were multiple =item tags in a row, none of which have bodies,
+    # we have disabled spacing with .PD 0 but have not set NEEDSPACE, so
+    # makespace will not turn spacing back on with .PD.  We have to do that
+    # ourselves, and also reset the count of consecutive items since we've now
+    # left the block in which we were counting.
+    $self->output (".PD\n") if $$self{ITEMS} > 1;
+    $$self{ITEMS} = 0;
+
     # If we emitted code for that indentation, end it.
     if (@{ $$self{SHIFTS} } > @{ $$self{INDENTS} }) {
         $self->output (".RE\n");
@@ -1401,14 +1409,16 @@ sub over_common_end {
 }
 
 # Dispatch the start and end calls as appropriate.
-sub start_over_bullet { my $s = shift; $s->over_common_start ('bullet', @_) }
-sub start_over_number { my $s = shift; $s->over_common_start ('number', @_) }
-sub start_over_text   { my $s = shift; $s->over_common_start ('text',   @_) }
-sub start_over_block  { my $s = shift; $s->over_common_start ('block',  @_) }
-sub end_over_bullet { $_[0]->over_common_end }
-sub end_over_number { $_[0]->over_common_end }
-sub end_over_text   { $_[0]->over_common_end }
-sub end_over_block  { $_[0]->over_common_end }
+#<<<
+sub start_over_bullet { my $s = shift; $s->over_common_start('bullet', @_) }
+sub start_over_number { my $s = shift; $s->over_common_start('number', @_) }
+sub start_over_text   { my $s = shift; $s->over_common_start('text',   @_) }
+sub start_over_block  { my $s = shift; $s->over_common_start('block',  @_) }
+sub end_over_bullet { my ($self) = @_; $self->over_common_end() }
+sub end_over_number { my ($self) = @_; $self->over_common_end() }
+sub end_over_text   { my ($self) = @_; $self->over_common_end() }
+sub end_over_block  { my ($self) = @_; $self->over_common_end() }
+#>>>
 
 # The common handler for all item commands.  Takes the type of the item, the
 # attributes, and then the text of the item.
@@ -1439,14 +1449,15 @@ sub item_common {
 
     # Take care of the indentation.  If shifts and indents are equal, close
     # the top shift, since we're about to create an indentation with .IP.
-    # Also output .PD 0 to turn off spacing between items if this item is
-    # directly following another one.  We only have to do that once for a
-    # whole chain of items so do it for the second item in the change.  Note
-    # that makespace is what undoes this.
     if (@{ $$self{SHIFTS} } == @{ $$self{INDENTS} }) {
         $self->output (".RE\n");
         pop @{ $$self{SHIFTS} };
     }
+
+    # Output .PD 0 to turn off spacing between items if this item is directly
+    # following another one.  We only have to do that once for a whole chain
+    # of items so do it for the second item in the change.  This is undone by
+    # makespace.
     $self->output (".PD 0\n") if ($$self{ITEMS} == 1);
 
     # Now, output the item tag itself.
@@ -1467,10 +1478,12 @@ sub item_common {
 }
 
 # Dispatch the item commands to the appropriate place.
-sub cmd_item_bullet { my $self = shift; $self->item_common ('bullet', @_) }
-sub cmd_item_number { my $self = shift; $self->item_common ('number', @_) }
-sub cmd_item_text   { my $self = shift; $self->item_common ('text',   @_) }
-sub cmd_item_block  { my $self = shift; $self->item_common ('block',  @_) }
+#<<<
+sub cmd_item_bullet { my $self = shift; $self->item_common('bullet', @_) }
+sub cmd_item_number { my $self = shift; $self->item_common('number', @_) }
+sub cmd_item_text   { my $self = shift; $self->item_common('text',   @_) }
+sub cmd_item_block  { my $self = shift; $self->item_common('block',  @_) }
+#>>>
 
 ##############################################################################
 # Backward compatibility
@@ -1607,8 +1620,10 @@ sub preamble_template {
 .    \}
 .\}
 .rr rF
+.\"
+.\" Required to disable full justification in groff 1.23.0.
+.if n .ds AD l
 ----END OF PREAMBLE----
-#'# for cperl-mode
 
     if ($$self{ENCODING} eq 'roff') {
         $preamble .= <<'----END OF PREAMBLE----'
@@ -1675,7 +1690,7 @@ sub preamble_template {
 .\}
 .rm #[ #] #H #V #F C
 ----END OF PREAMBLE----
-#`# for cperl-mode
+        #`# for cperl-mode
     }
     return $preamble;
 }
@@ -2407,7 +2422,7 @@ recognition and all bugs are mine.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 1999-2010, 2012-2020, 2022-2023 Russ Allbery <rra@cpan.org>
+Copyright 1999-2020, 2022-2024 Russ Allbery <rra@cpan.org>
 
 Substantial contributions by Sean Burke <sburke@cpan.org>.
 

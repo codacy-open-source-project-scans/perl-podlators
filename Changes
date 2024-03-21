@@ -1,6 +1,9 @@
                       Revision history for podlators
 
-6.00 - Not Released
+v6.0.0 - Not Released
+
+ - podlators now uses semantic versioning for the package and module
+   versions and requires a minimum Perl version of 5.12.
 
  - Pod::Man now translates all "-" characters in the input into *roff "\-"
    escapes (normally rendered as an ASCII hyphen-minus, U+002D) rather
@@ -29,10 +32,31 @@
    at build time.  Thanks to Marco Sirabella for the analysis and an
    initial patch.  (GitHub #21)
 
+ - Add a workaround to Pod::Man to force persistent ragged-right
+   justification under nroff with groff 1.23.0.  Thanks to Guillem Jover
+   for the report and G. Branden Robinson for the analysis.  (GitHub #23)
+
+ - Fix wrapping of text with S<> markup in all subclasses of Pod::Text.
+   Thanks to Jim Avera for the report.  (GitHub #24)
+
+ - Pod::Man now forces a blank line after a nested list contains only
+   =item tags without bodies.  In previous versions, the blank line before
+   the next item in the surrounding =over block was not included.  Thanks
+   to Julien ÉLIE for the report.  (GitHub #26)
+
+ - Import PerlIO before checking for layers so that PerlIO::F_UTF8 is
+   available, which fixes double-encoding of output when a :utf8 layer is
+   in place and PerlIO is not imported.  Thanks to youpong for the bug
+   report, James Keenan for the elaboration, and Graham Knop for the fix.
+   (GitHub #25)
+
  - pod2text --help now exits with status 0, not 1, matching normal UNIX
    command behavior and the behavior of pod2man.  (GitHub #19)
 
  - Fix tests when NO_COLOR is set in the environment.  (GitHub #20)
+
+ - Avoid using strftime on gmtime in the test suite, since its behavior is
+   unexpected in Perl blead.  (GitHub #27)
 
 5.01 - 2022-12-25
 
