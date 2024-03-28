@@ -2,8 +2,10 @@
 
 v6.0.0 - Not Released
 
+ - Drop support for Perl 5.10.  podlators now requires Perl 5.12 or later.
+
  - podlators now uses semantic versioning for the package and module
-   versions and requires a minimum Perl version of 5.12.
+   versions, with a v prefix to work with Perl's packaging system.
 
  - Pod::Man now translates all "-" characters in the input into *roff "\-"
    escapes (normally rendered as an ASCII hyphen-minus, U+002D) rather
@@ -54,9 +56,6 @@ v6.0.0 - Not Released
    command behavior and the behavior of pod2man.  (GitHub #19)
 
  - Fix tests when NO_COLOR is set in the environment.  (GitHub #20)
-
- - Avoid using strftime on gmtime in the test suite, since its behavior is
-   unexpected in Perl blead.  (GitHub #27)
 
 5.01 - 2022-12-25
 
